@@ -40,11 +40,13 @@ class FollowerRelation(models.Model):
 
 @receiver(post_save, sender=FollowerRelation)
 def add_follower_relation_cache(sender, instance, *args, **kwargs):
-    from account.serializers import MemberFansSerializer, MemberFollowedSerializer
+    from account.serializers import MemberFansSerializer, MemberFollowedSerializer, MemberFriendSerializer
 
     follow_member, member = instance.follow_member, instance.member
     member_fans_cache_key = f'member_fans_cache:{follow_member.id}'
     member_followed_cache_key = f'member_follow_cache:{member.id}'
+    member_friend_cache_key = f'member_follow_cache:{member.id}'
+    follow_member_friend_cache_key = f'member_follow_cache:{follow_member.id}'
 
     if not cache.get(member_fans_cache_key):
         fans_query = follow_member.fans.select_related('member').all()
@@ -66,7 +68,30 @@ def add_follower_relation_cache(sender, instance, *args, **kwargs):
         cache_data.append(OrderedDict(serializer.data))
         cache.set(member_followed_cache_key, cache_data, timeout=60*60*6)
 
-    # TODO: 實作好友 cache
+    # 相互關注才須加快取
+    if FollowerRelation.objects.filter(member=instance.follow_member, follow_member=instance.member).exists():
+        if not cache.get(member_friend_cache_key):
+            followed_member = FollowerRelation.objects.filter(member=member).values('follow_member')
+            queryset = FollowerRelation.objects.filter(follow_member=member, member__in=followed_member)
+            serializer = MemberFriendSerializer(queryset, many=True)
+            cache.set(member_friend_cache_key, serializer.data, timeout=60*60*6)
+        else:
+            serializer = MemberFollowedSerializer(instance, many=False)
+            cache_data = cache.get(member_friend_cache_key)
+            cache_data.append(OrderedDict(serializer.data))
+            cache.set(member_friend_cache_key, cache_data, timeout=60*60*6)
+
+        if not cache.get(follow_member_friend_cache_key):
+            followed_member = FollowerRelation.objects.filter(member=follow_member).values('follow_member')
+            queryset = FollowerRelation.objects.filter(follow_member=follow_member, member__in=followed_member)
+            serializer = MemberFriendSerializer(queryset, many=True)
+            cache.set(follow_member_friend_cache_key, serializer.data, timeout=60*60*6)
+        else:
+            serializer = MemberFollowedSerializer(instance, many=False)
+            cache_data = cache.get(follow_member_friend_cache_key)
+            cache_data.append(OrderedDict(serializer.data))
+            cache.set(follow_member_friend_cache_key, cache_data, timeout=60*60*6)
+
 
 @receiver(pre_delete, sender=FollowerRelation)
 def remove_follower_relation_cache(sender, instance, *args, **kwargs):
